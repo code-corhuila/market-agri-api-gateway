@@ -24,18 +24,19 @@ request() {
   rm -f "$headers_file"
 }
 header() { grep -i "^$1:" <<< "$headers" | head -1 | cut -d' ' -f2-; }
-# json <python subscript>: a field of the last body, e.g. json '["error"]'.
-json() { python3 -c "import json,sys; print(json.loads(sys.argv[1])$1)" "$body" 2>/dev/null; }
+# field <name>: a top-level string field of the last JSON body, e.g. field error. Plain sed, so the
+# test needs only bash and curl (Git Bash on Windows has no python3).
+field() { sed -n 's/.*"'"$1"'":"\([^"]*\)".*/\1/p' <<< "$body"; }
 
 request /health
 check "/health answers 200" '[ "$status" = 200 ]'
-check "/health body is {\"status\":\"UP\"}" '[ "$(json "[\"status\"]")" = UP ]'
+check "/health body is {\"status\":\"UP\"}" '[ "$(field status)" = UP ]'
 
 request /api/v1/no-such-domain/things
 check "an unknown API route answers 404" '[ "$status" = 404 ]'
-check "the 404 carries the common error body" '[ "$(json "[\"error\"]")" = NOT_FOUND ]'
-check "the 404 message is the contract one" '[ "$(json "[\"message\"]")" = "El recurso solicitado no existe." ]'
-check "the 404 traceId equals the X-Correlation-Id header" '[ "$(json "[\"traceId\"]")" = "$(header X-Correlation-Id)" ]'
+check "the 404 carries the common error body" '[ "$(field error)" = NOT_FOUND ]'
+check "the 404 message is the contract one" '[ "$(field message)" = "El recurso solicitado no existe." ]'
+check "the 404 traceId equals the X-Correlation-Id header" '[ "$(field traceId)" = "$(header X-Correlation-Id)" ]'
 
 request /health
 check "without X-Correlation-Id the gateway generates a UUID and returns it" '[[ "$(header X-Correlation-Id)" =~ $UUID ]]'
@@ -54,7 +55,7 @@ if [ "$FRONT" = up ]; then
     '! grep -q NOT_FOUND <<< "$body"'
 else
   check "with the front down, / answers 503" '[ "$status" = 503 ]'
-  check "the 503 carries the common error body" '[ "$(json "[\"error\"]")" = SERVICE_UNAVAILABLE ]'
+  check "the 503 carries the common error body" '[ "$(field error)" = SERVICE_UNAVAILABLE ]'
   request /health
   check "with the front down, the gateway stays healthy" '[ "$status" = 200 ]'
 fi
