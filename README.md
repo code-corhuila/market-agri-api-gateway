@@ -15,7 +15,9 @@ Governance and documentation: [`market-agri-docs`](https://github.com/code-corhu
 Every response carries `X-Correlation-Id` (the client's, if safe; otherwise a generated UUID),
 which is also forwarded to the service and written in the JSON access log. A service that does not
 answer gives `503 SERVICE_UNAVAILABLE` on its routes only: names are resolved on every request.
-API routes, the credential filter, CORS and rate limits arrive in the next branches.
+Every response also forbids framing (`X-Frame-Options`, CSP `frame-ancestors`). API routes, the
+credential filter, CORS, rate limits and a full Content-Security-Policy (it must list the portals'
+origins) arrive in the next branches.
 
 ## Structure (Annex F)
 

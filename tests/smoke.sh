@@ -32,6 +32,10 @@ request /health
 check "/health answers 200" '[ "$status" = 200 ]'
 check "/health body is {\"status\":\"UP\"}" '[ "$(field status)" = UP ]'
 
+check "every response forbids framing (X-Frame-Options)" '[ "$(header X-Frame-Options)" = DENY ]'
+check "every response forbids framing (CSP frame-ancestors)" \
+  '[ "$(header Content-Security-Policy)" = "frame-ancestors '"'"'none'"'"'" ]'
+
 request /api/v1/no-such-domain/things
 check "an unknown API route answers 404" '[ "$status" = 404 ]'
 check "the 404 carries the common error body" '[ "$(field error)" = NOT_FOUND ]'
