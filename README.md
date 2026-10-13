@@ -10,14 +10,15 @@ Governance and documentation: [`market-agri-docs`](https://github.com/code-corhu
 |---|---|---|
 | `GET /health` | the gateway itself | `{"status":"UP"}` (api-contract E-60) |
 | `/api/…` not claimed by a route | the gateway itself | `404 NOT_FOUND` with the common error body |
+| `/portals/<name>/…` (`auth`, `catalog`, `transactions`) | `<name>-portal:80`, prefix stripped | The portals in the same origin (ADR-017); `remoteEntry.js` and the manifest answer `Cache-Control: no-store`; any other name under `/portals/` is `404` |
 | `/` and every other path | `front:80` (`market-agri-front`) | The web interface, same origin as the API |
 
 Every response carries `X-Correlation-Id` (the client's, if safe; otherwise a generated UUID),
 which is also forwarded to the service and written in the JSON access log. A service that does not
 answer gives `503 SERVICE_UNAVAILABLE` on its routes only: names are resolved on every request.
 Every response also forbids framing (`X-Frame-Options`, CSP `frame-ancestors`). API routes, the
-credential filter, CORS, rate limits and a full Content-Security-Policy (it must list the portals'
-origins) arrive in the next branches.
+credential filter, CORS, rate limits and a full Content-Security-Policy (now `'self'`: one origin)
+arrive in the next branches.
 
 ## Structure (Annex F)
 
