@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Checks the gateway must pass (Annex F, "Cómo se verifica"). Run against a running gateway:
-#   GATEWAY_URL=http://localhost:8080 FRONT=down bash tests/smoke.sh   # front not running
-#   GATEWAY_URL=http://localhost:8080 FRONT=up   bash tests/smoke.sh   # front running
+#   GATEWAY_URL=http://localhost:8080 FRONT=down bash tests/smoke.sh   # front and portals not running
+#   GATEWAY_URL=http://localhost:8080 FRONT=up   bash tests/smoke.sh   # front and portals running
 set -uo pipefail
 
 GATEWAY_URL="${GATEWAY_URL:-http://localhost:8080}"
@@ -63,6 +63,28 @@ else
   request /health
   check "with the front down, the gateway stays healthy" '[ "$status" = 200 ]'
 fi
+
+# ADR-017: each portal under /portals/<name>/, prefix stripped, remoteEntry.js never cached.
+for name in auth catalog transactions; do
+  request "/portals/$name/remoteEntry.js"
+  if [ "$FRONT" = up ]; then
+    check "/portals/$name/remoteEntry.js is the $name portal's, without the prefix" \
+      '[ "$status" = 200 ] && grep -q "$name-portal remoteEntry" <<< "$body"'
+    check "/portals/$name/remoteEntry.js is never cached" '[ "$(header Cache-Control)" = no-store ]'
+    check "/portals/$name/remoteEntry.js keeps the headers of every response" \
+      '[ "$(header X-Frame-Options)" = DENY ] && [ -n "$(header X-Correlation-Id)" ]'
+    request "/portals/$name/assets/chunk.js"
+    check "/portals/$name/assets/ reaches the $name portal and may be cached" \
+      '[ "$status" = 200 ] && grep -q "$name-portal chunk" <<< "$body" && [ "$(header Cache-Control)" != no-store ]'
+  else
+    check "with the $name portal down, /portals/$name/ answers 503 with the error body" \
+      '[ "$status" = 503 ] && [ "$(field error)" = SERVICE_UNAVAILABLE ]'
+  fi
+done
+
+request /portals/unknown/remoteEntry.js
+check "a portal that does not exist answers 404 with the error body" \
+  '[ "$status" = 404 ] && [ "$(field error)" = NOT_FOUND ]'
 
 echo
 if [ "$failures" -gt 0 ]; then echo "$failures check(s) failed"; exit 1; fi
