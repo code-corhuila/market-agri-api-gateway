@@ -1,0 +1,15 @@
+# Included by market-agri-infra. The gateway is the only service of the platform that publishes a
+# port to the host (Annex F); its port differs per environment (GATEWAY_PORT in infra's env file).
+services:
+  api-gateway:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    ports: ['${GATEWAY_PORT:?set GATEWAY_PORT}:8080']
+    restart: unless-stopped
+    networks: [platform]
+
+networks:
+  platform:
+    name: platform-${ENV:?set ENV}
+    external: true
