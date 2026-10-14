@@ -1,0 +1,53 @@
+name: CI
+
+# Required status check `ci` on develop, qa and main (git-conventions §6). The gateway is
+# configuration, so its test is the smoke test against the built image (Annex F, Annex I).
+
+on:
+  pull_request:
+    branches: [develop, qa, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GATEWAY_URL: http://localhost:8080
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the gateway image
+        run: docker build -f deploy/Dockerfile -t market-agri-api-gateway:ci .
+
+      - name: Configuration is valid (nginx -t)
+        run: docker run --rm market-agri-api-gateway:ci nginx -t
+
+      - name: Start the gateway alone on a test network
+        run: |
+          docker network create platform-ci
+          docker run -d --name api-gateway --network platform-ci -p 8080:8080 market-agri-api-gateway:ci
+          for i in $(seq 1 30); do curl -fs "$GATEWAY_URL/health" && break; sleep 1; done
+
+      - name: Smoke test with the front down (the gateway must still start and answer 503)
+        run: FRONT=down bash tests/smoke.sh
+
+      - name: Start a stand-in front container
+        run: |
+          docker run -d --name front --network platform-ci \
+            -v "$PWD/tests/fixtures/front:/usr/share/nginx/html:ro" nginx:1.27-alpine
+          sleep 2
+
+      - name: Smoke test with the front up
+        run: FRONT=up bash tests/smoke.sh
+
+      - name: Gateway log (JSON with correlationId)
+        if: always()
+        run: docker logs api-gateway
