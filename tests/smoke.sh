@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Checks the gateway must pass (Annex F, "Cómo se verifica"). Run against a running gateway:
-#   GATEWAY_URL=http://localhost:8080 FRONT=down bash tests/smoke.sh   # front and portals not running
-#   GATEWAY_URL=http://localhost:8080 FRONT=up   bash tests/smoke.sh   # front and portals running
+#   GATEWAY_URL=http://localhost:8080 FRONT=down bash tests/smoke.sh   # front, portals, services down
+#   GATEWAY_URL=http://localhost:8080 FRONT=up   bash tests/smoke.sh   # front, portals, services up
 set -uo pipefail
 
 GATEWAY_URL="${GATEWAY_URL:-http://localhost:8080}"
@@ -81,6 +81,29 @@ for name in auth catalog transactions; do
       '[ "$status" = 503 ] && [ "$(field error)" = SERVICE_UNAVAILABLE ]'
   fi
 done
+
+# ADR-017, HU-PLAT-010: /status/<service> → that service's GET /health, GET only, no credential.
+for service in auth catalog chat transactions workflow; do
+  request "/status/$service" -H 'Authorization: Bearer smoke-token'
+  if [ "$FRONT" = up ]; then
+    check "/status/$service answers the $service service's /health" \
+      '[ "$status" = 200 ] && [ "$(field status)" = UP ]'
+    check "/status/$service never forwards the caller's credential" \
+      'grep -q "\"authorization\":\"\"" <<< "$body"'
+  else
+    check "with the $service service down, /status/$service answers 503 with the error body" \
+      '[ "$status" = 503 ] && [ "$(field error)" = SERVICE_UNAVAILABLE ]'
+  fi
+done
+
+request /status/catalog -X POST
+check "/status/<service> accepts GET only" '[ "$status" = 405 ]'
+request /status/payments
+check "a service that does not exist answers 404 with the error body" \
+  '[ "$status" = 404 ] && [ "$(field error)" = NOT_FOUND ]'
+request /status/catalog/anything
+check "/status/<service> reaches /health and nothing else" \
+  '[ "$status" = 404 ] && [ "$(field error)" = NOT_FOUND ]'
 
 request /portals/unknown/remoteEntry.js
 check "a portal that does not exist answers 404 with the error body" \

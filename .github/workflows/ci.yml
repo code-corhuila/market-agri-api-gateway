@@ -36,10 +36,10 @@ jobs:
           docker run -d --name api-gateway --network platform-ci -p 8080:8080 market-agri-api-gateway:ci
           for i in $(seq 1 30); do curl -fs "$GATEWAY_URL/health" && break; sleep 1; done
 
-      - name: Smoke test with the front and the portals down (the gateway must still start and answer 503)
+      - name: Smoke test with the front, the portals and the services down (the gateway must still start and answer 503)
         run: FRONT=down bash tests/smoke.sh
 
-      - name: Start stand-ins of the front and of the three portals
+      - name: Start stand-ins of the front, the three portals and the five services
         run: |
           docker run -d --name front --network platform-ci \
             -v "$PWD/tests/fixtures/front:/usr/share/nginx/html:ro" nginx:1.27-alpine
@@ -47,9 +47,14 @@ jobs:
             docker run -d --name "$name-portal" --network platform-ci \
               -v "$PWD/tests/fixtures/portals/$name:/usr/share/nginx/html:ro" nginx:1.27-alpine
           done
+          for name in auth-api catalog-api chat-api transactions-api workflow; do
+            docker run -d --name "$name" --network platform-ci \
+              -v "$PWD/tests/fixtures/services/health.conf:/etc/nginx/conf.d/default.conf:ro" \
+              nginx:1.27-alpine
+          done
           sleep 2
 
-      - name: Smoke test with the front and the portals up
+      - name: Smoke test with the front, the portals and the services up
         run: FRONT=up bash tests/smoke.sh
 
       - name: Gateway log (JSON with correlationId)
