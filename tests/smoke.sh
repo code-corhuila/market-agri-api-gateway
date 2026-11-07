@@ -134,6 +134,20 @@ request /internal/v1/transactions -X POST -H 'Authorization: Bearer smoke-token'
 check "/internal/v1/transactions (I-06) is never routed: 404 with the error body (D-C27)" \
   '[ "$status" = 404 ] && [ "$(field error)" = NOT_FOUND ]'
 
+# F6 (HU-AUTH-002, ADR-017): /api/v1/auth/ → auth-api. Anonymous cards: E-01, E-02, E-03 (POST) and
+# E-05 (GET); the rest (E-04, E-06, E-07, E-08) needs Authorization. I-01 is internal: never routed.
+request /api/v1/auth/users/0000
+expect_unauthorized "GET /api/v1/auth/users/{id} (E-08) without Authorization"
+request /api/v1/auth/logout -X POST
+expect_unauthorized "POST /api/v1/auth/logout (E-04) without Authorization"
+request /api/v1/auth/farm-profile
+expect_unauthorized "GET /api/v1/auth/farm-profile (E-06) without Authorization"
+request /api/v1/auth/login
+expect_unauthorized "GET on the login path (only POST is the anonymous E-02) without Authorization"
+request /internal/v1/auth/service-token -X POST -H 'Content-Type: application/json' -d '{}'
+check "/internal/v1/auth/service-token (I-01) is never routed: 404 with the error body (D-C27)" \
+  '[ "$status" = 404 ] && [ "$(field error)" = NOT_FOUND ]'
+
 request /internal/v1/catalog/products/0000
 check "/internal/ is never routed: 404 with the error body (D-C27)" \
   '[ "$status" = 404 ] && [ "$(field error)" = NOT_FOUND ]'
@@ -194,6 +208,17 @@ if [ "$FRONT" = up ]; then
   check "transactions-api receives the same X-Correlation-Id and no X-User-*" \
     '[ "$(field correlationId)" = smoke-transactions-1 ] && grep -q "\"xUserId\":\"\"" <<< "$body"'
 
+  # (method path card) in variables: inside check, $1 and $2 are check's own arguments.
+  for card in "POST /api/v1/auth/login E-02" "POST /api/v1/auth/register E-01" "GET /api/v1/auth/jwks E-05"; do
+    read -r method path name <<< "$card"
+    if [ "$method" = GET ]; then request "$path"; else request "$path" -X POST -H 'Content-Type: application/json' -d '{}'; fi
+    check "$method $path ($name) is anonymous and reaches auth-api without a credential" \
+      '[ "$status" = 200 ] && [ "$(field path)" = "$path" ] && grep -q "\"authorization\":\"\"" <<< "$body"'
+  done
+  request /api/v1/auth/users/0000 -H 'Authorization: Bearer smoke-token' -H 'X-User-Role: ADMIN'
+  check "GET /api/v1/auth/users/{id} with Authorization reaches auth-api with the credential and no X-User-*" \
+    '[ "$status" = 200 ] && [ "$(field path)" = /api/v1/auth/users/0000 ] && [ "$(field authorization)" = "Bearer smoke-token" ] && grep -q "\"xUserId\":\"\"" <<< "$body"'
+
   # Last: it uses up this client's write allowance (a general per-IP ceiling on writes, cross-cutting §9).
   limited=""
   for _ in $(seq 1 40); do
@@ -217,6 +242,9 @@ else
     '[ "$status" = 503 ] && [ "$(field error)" = SERVICE_UNAVAILABLE ]'
   request /api/v1/transactions/webhooks/payment-gateway -X POST -d '{}'
   check "with transactions-api down, the webhook answers 503 (the provider retries)" \
+    '[ "$status" = 503 ] && [ "$(field error)" = SERVICE_UNAVAILABLE ]'
+  request /api/v1/auth/login -X POST -H 'Content-Type: application/json' -d '{}'
+  check "with auth-api down, the login answers 503 with the error body" \
     '[ "$status" = 503 ] && [ "$(field error)" = SERVICE_UNAVAILABLE ]'
 fi
 
