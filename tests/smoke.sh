@@ -122,6 +122,14 @@ expect_unauthorized "DELETE on a catalog route without Authorization"
 
 # E4b-2 (ADR-017, Annex F): /api/v1/transactions/ → transactions-api. Every card needs a token except
 # the provider's webhook (E-43): its checksum is the authentication, checked by the service (ADR-019).
+request /api/v1/workflow/checkouts -X POST -H 'Content-Type: application/json' -d '{}'
+expect_unauthorized "POST /api/v1/workflow/checkouts (E-40) without Authorization"
+request /api/v1/workflow/checkouts/00000000-0000-4000-8000-000000000001
+expect_unauthorized "GET /api/v1/workflow/checkouts/{id} (E-46) without Authorization"
+request /api/v1/workflow/checkouts -X OPTIONS -H 'Origin: http://localhost:5173' \
+  -H 'Access-Control-Request-Method: POST'
+check "workflow preflight succeeds without Authorization" '[ "$status" = 204 ]'
+
 request /api/v1/transactions/mine
 expect_unauthorized "GET /api/v1/transactions/mine (E-42) without Authorization"
 request /api/v1/transactions/0000
@@ -197,6 +205,14 @@ if [ "$FRONT" = up ]; then
     '[ "$status" = 200 ] && [ "$(field authorization)" = "Bearer smoke-token" ]'
   check "X-User-* never reaches a service (D-C28)" '[ -z "$(field xUserId)" ] && grep -q "\"xUserId\":\"\"" <<< "$body"'
 
+  request /api/v1/workflow/checkouts -X POST -H 'Authorization: Bearer smoke-token' -d '{}'
+  check "E-40 reaches workflow with its original path and credential" \
+    '[ "$status" = 200 ] && [ "$(field path)" = /api/v1/workflow/checkouts ] && [ "$(field authorization)" = "Bearer smoke-token" ]'
+  request /api/v1/workflow/checkouts/00000000-0000-4000-8000-000000000001 \
+    -H 'Authorization: Bearer smoke-token' -H 'X-User-Id: forged' -H 'X-Correlation-Id: smoke-workflow-1'
+  check "E-46 reaches workflow and carries the correlation ID without X-User-Id" \
+    '[ "$status" = 200 ] && [ "$(field path)" = /api/v1/workflow/checkouts/00000000-0000-4000-8000-000000000001 ] && [ "$(field correlationId)" = smoke-workflow-1 ] && grep -q \"xUserId\" <<< "$body" && [ -z "$(field xUserId)" ]'
+
   request /api/v1/transactions/webhooks/payment-gateway -X POST -H 'Content-Type: application/json' \
     -d '{"event":"transaction.updated"}'
   check "POST /api/v1/transactions/webhooks/payment-gateway (E-43) is anonymous and reaches transactions-api" \
@@ -257,6 +273,9 @@ else
     '[ "$status" = 503 ] && [ "$(field error)" = SERVICE_UNAVAILABLE ]'
   request /media/0123456789abcdef0123456789abcdef.png
   check "with catalog-api down, /media/ answers 503 with the error body" \
+    '[ "$status" = 503 ] && [ "$(field error)" = SERVICE_UNAVAILABLE ]'
+  request /api/v1/workflow/checkouts/00000000-0000-4000-8000-000000000001 -H 'Authorization: Bearer smoke-token'
+  check "with workflow down, E-46 answers 503 with the error body" \
     '[ "$status" = 503 ] && [ "$(field error)" = SERVICE_UNAVAILABLE ]'
   request /api/v1/transactions/mine -H 'Authorization: Bearer smoke-token'
   check "with transactions-api down, /api/v1/transactions/ answers 503 with the error body" \
