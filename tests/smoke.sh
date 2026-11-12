@@ -130,6 +130,20 @@ request /api/v1/workflow/checkouts -X OPTIONS -H 'Origin: http://localhost:5173'
   -H 'Access-Control-Request-Method: POST'
 check "workflow preflight succeeds without Authorization" '[ "$status" = 204 ]'
 
+# HU-PLAT-005 (ADR-017, Annex F): /api/v1/chat/ → chat-api. Every card needs a token (E-30…E-34);
+# only the preflights are anonymous. I-05 stays internal: /internal/ is never routed.
+request /api/v1/chat/conversations -X POST -H 'Content-Type: application/json' -d '{}'
+expect_unauthorized "POST /api/v1/chat/conversations (E-30) without Authorization"
+request /api/v1/chat/conversations
+expect_unauthorized "GET /api/v1/chat/conversations (E-31) without Authorization"
+request /api/v1/chat/conversations/00000000-0000-4000-8000-000000000001/purchase-method -X PUT -d '{}'
+expect_unauthorized "PUT /api/v1/chat/conversations/{id}/purchase-method (E-34) without Authorization"
+request /api/v1/chat/conversations -X OPTIONS -H 'Origin: http://localhost:5173' \
+  -H 'Access-Control-Request-Method: POST'
+check "chat preflight succeeds without Authorization" '[ "$status" = 204 ]'
+request /internal/v1/chat/conversations/00000000-0000-4000-8000-000000000001 -H 'Authorization: Bearer smoke-token'
+check "I-05 is never reachable through the gateway" '[ "$status" = 404 ]'
+
 request /api/v1/transactions/mine
 expect_unauthorized "GET /api/v1/transactions/mine (E-42) without Authorization"
 request /api/v1/transactions/0000
@@ -213,6 +227,15 @@ if [ "$FRONT" = up ]; then
   check "E-46 reaches workflow and carries the correlation ID without X-User-Id" \
     '[ "$status" = 200 ] && [ "$(field path)" = /api/v1/workflow/checkouts/00000000-0000-4000-8000-000000000001 ] && [ "$(field correlationId)" = smoke-workflow-1 ] && grep -q \"xUserId\" <<< "$body" && [ -z "$(field xUserId)" ]'
 
+  request /api/v1/chat/conversations/00000000-0000-4000-8000-000000000001 \
+    -H 'Authorization: Bearer smoke-token' -H 'X-User-Id: forged' -H 'X-Correlation-Id: smoke-chat-1'
+  check "E-32 reaches chat-api with its path, credential and correlation ID, without X-User-Id" \
+    '[ "$status" = 200 ] && [ "$(field path)" = /api/v1/chat/conversations/00000000-0000-4000-8000-000000000001 ] && [ "$(field authorization)" = "Bearer smoke-token" ] && [ "$(field correlationId)" = smoke-chat-1 ] && [ -z "$(field xUserId)" ]'
+  request /api/v1/chat/conversations/00000000-0000-4000-8000-000000000001/purchase-method -X PUT \
+    -H 'Authorization: Bearer smoke-token' -H 'Content-Type: application/json' -d '{"method":"PLATFORM"}'
+  check "E-34 reaches chat-api with its path and method" \
+    '[ "$status" = 200 ] && [ "$(field path)" = /api/v1/chat/conversations/00000000-0000-4000-8000-000000000001/purchase-method ]'
+
   request /api/v1/transactions/webhooks/payment-gateway -X POST -H 'Content-Type: application/json' \
     -d '{"event":"transaction.updated"}'
   check "POST /api/v1/transactions/webhooks/payment-gateway (E-43) is anonymous and reaches transactions-api" \
@@ -276,6 +299,9 @@ else
     '[ "$status" = 503 ] && [ "$(field error)" = SERVICE_UNAVAILABLE ]'
   request /api/v1/workflow/checkouts/00000000-0000-4000-8000-000000000001 -H 'Authorization: Bearer smoke-token'
   check "with workflow down, E-46 answers 503 with the error body" \
+    '[ "$status" = 503 ] && [ "$(field error)" = SERVICE_UNAVAILABLE ]'
+  request /api/v1/chat/conversations -H 'Authorization: Bearer smoke-token'
+  check "with chat-api down, /api/v1/chat/ answers 503 with the error body" \
     '[ "$status" = 503 ] && [ "$(field error)" = SERVICE_UNAVAILABLE ]'
   request /api/v1/transactions/mine -H 'Authorization: Bearer smoke-token'
   check "with transactions-api down, /api/v1/transactions/ answers 503 with the error body" \
