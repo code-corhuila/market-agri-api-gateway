@@ -11,6 +11,7 @@ Governance and documentation: [`market-agri-docs`](https://github.com/code-corhu
 | `GET /health` | the gateway itself | `{"status":"UP"}` (api-contract E-60) |
 | `/api/v1/catalog/…` | `catalog-api:8080` | E-10, E-11, E-19, E-20 anonymous; any other route without `Authorization` → `401 UNAUTHORIZED` from the gateway (the service validates the token, ADR-020); `X-User-*` stripped (D-C28) |
 | `/api/v1/transactions/…` | `transactions-api:8080` | Every route needs `Authorization` (`401` from the gateway otherwise) except `POST /api/v1/transactions/webhooks/payment-gateway` (E-43), whose checksum the service checks (ADR-019); `X-User-*` stripped (D-C28) |
+| `/api/v1/auth/…` | `auth-api:8080` | Anonymous: `POST` register, login and refresh (E-01, E-02, E-03) and `GET` jwks (E-05); any other route needs `Authorization` (`401` from the gateway otherwise); `X-User-*` stripped (D-C28); I-01 is internal and never routed |
 | `GET /media/{key}` | `catalog-api:8080` | The photos of the catalog (E-62), anonymous with no credential filter (an `<img>` cannot send a token, D-C30); catalog-api sets `Cache-Control` |
 | `/api/…` not claimed by a route | the gateway itself | `404 NOT_FOUND` with the common error body |
 | `/internal/…` | the gateway itself | `404 NOT_FOUND`: the internal API is reached inside the platform only (D-C27) |
