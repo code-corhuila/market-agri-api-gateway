@@ -120,6 +120,20 @@ expect_unauthorized "POST /api/v1/catalog/products (E-13) without Authorization"
 request /api/v1/catalog/products/0000/photo -X DELETE
 expect_unauthorized "DELETE on a catalog route without Authorization"
 
+# E4b-2 (ADR-017, Annex F): /api/v1/transactions/ → transactions-api. Every card needs a token except
+# the provider's webhook (E-43): its checksum is the authentication, checked by the service (ADR-019).
+request /api/v1/transactions/mine
+expect_unauthorized "GET /api/v1/transactions/mine (E-42) without Authorization"
+request /api/v1/transactions/0000
+expect_unauthorized "GET /api/v1/transactions/{id} (E-41) without Authorization"
+request /api/v1/transactions/admin/transactions
+expect_unauthorized "GET /api/v1/transactions/admin/transactions (E-44) without Authorization"
+request /api/v1/transactions/webhooks/payment-gateway
+expect_unauthorized "GET on the webhook path (only POST is the anonymous E-43) without Authorization"
+request /internal/v1/transactions -X POST -H 'Authorization: Bearer smoke-token'
+check "/internal/v1/transactions (I-06) is never routed: 404 with the error body (D-C27)" \
+  '[ "$status" = 404 ] && [ "$(field error)" = NOT_FOUND ]'
+
 request /internal/v1/catalog/products/0000
 check "/internal/ is never routed: 404 with the error body (D-C27)" \
   '[ "$status" = 404 ] && [ "$(field error)" = NOT_FOUND ]'
@@ -169,6 +183,17 @@ if [ "$FRONT" = up ]; then
     '[ "$status" = 200 ] && [ "$(field authorization)" = "Bearer smoke-token" ]'
   check "X-User-* never reaches a service (D-C28)" '[ -z "$(field xUserId)" ] && grep -q "\"xUserId\":\"\"" <<< "$body"'
 
+  request /api/v1/transactions/webhooks/payment-gateway -X POST -H 'Content-Type: application/json' \
+    -d '{"event":"transaction.updated"}'
+  check "POST /api/v1/transactions/webhooks/payment-gateway (E-43) is anonymous and reaches transactions-api" \
+    '[ "$status" = 200 ] && [ "$(field path)" = /api/v1/transactions/webhooks/payment-gateway ]'
+  request /api/v1/transactions/mine -H 'Authorization: Bearer smoke-token' -H 'X-User-Id: someone-else' \
+    -H 'X-Correlation-Id: smoke-transactions-1'
+  check "GET /api/v1/transactions/mine with Authorization reaches transactions-api with the credential" \
+    '[ "$status" = 200 ] && [ "$(field path)" = /api/v1/transactions/mine ] && [ "$(field authorization)" = "Bearer smoke-token" ]'
+  check "transactions-api receives the same X-Correlation-Id and no X-User-*" \
+    '[ "$(field correlationId)" = smoke-transactions-1 ] && grep -q "\"xUserId\":\"\"" <<< "$body"'
+
   # Last: it uses up this client's write allowance (a general per-IP ceiling on writes, cross-cutting §9).
   limited=""
   for _ in $(seq 1 40); do
@@ -186,6 +211,12 @@ else
     '[ "$status" = 503 ] && [ "$(field error)" = SERVICE_UNAVAILABLE ]'
   request /media/0123456789abcdef0123456789abcdef.png
   check "with catalog-api down, /media/ answers 503 with the error body" \
+    '[ "$status" = 503 ] && [ "$(field error)" = SERVICE_UNAVAILABLE ]'
+  request /api/v1/transactions/mine -H 'Authorization: Bearer smoke-token'
+  check "with transactions-api down, /api/v1/transactions/ answers 503 with the error body" \
+    '[ "$status" = 503 ] && [ "$(field error)" = SERVICE_UNAVAILABLE ]'
+  request /api/v1/transactions/webhooks/payment-gateway -X POST -d '{}'
+  check "with transactions-api down, the webhook answers 503 (the provider retries)" \
     '[ "$status" = 503 ] && [ "$(field error)" = SERVICE_UNAVAILABLE ]'
 fi
 
