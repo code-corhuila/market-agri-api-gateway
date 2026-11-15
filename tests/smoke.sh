@@ -146,6 +146,24 @@ if [ "$FRONT" = up ]; then
   check "GET /api/v1/catalog/categories (E-19) is anonymous" '[ "$status" = 200 ]'
   request /api/v1/catalog/units
   check "GET /api/v1/catalog/units (E-20) is anonymous" '[ "$status" = 200 ]'
+  # E-62 (D-C30): /media/ → catalog-api, anonymous (an <img> sends no token), its cache kept.
+  request /media/0123456789abcdef0123456789abcdef.png
+  check "GET /media/{key} (E-62) is anonymous and reaches catalog-api, not the front" \
+    '[ "$status" = 200 ] && grep -q "^photo of [^:]*: /media/0123456789abcdef0123456789abcdef.png" <<< "$body"'
+  check "the photo keeps the Cache-Control of catalog-api" '[ "$(header Cache-Control)" = "public, max-age=86400" ]'
+  check "the photo keeps the headers of every response" '[ "$(header X-Frame-Options)" = DENY ]'
+
+  # D-C30: a photo is up to 5 MB (catalog-api answers 413 above it); past the gateway's 6 MB the
+  # gateway itself refuses it, with the same body. The file goes through stdin: no path for curl.
+  big="$(mktemp)"
+  head -c $((7 * 1024 * 1024)) /dev/zero > "$big"
+  request /api/v1/catalog/products/0000/photo -X POST -H 'Authorization: Bearer smoke-token' \
+    -H 'Content-Type: application/octet-stream' --data-binary @- < "$big"
+  rm -f "$big"
+  check "a body over 6 MB answers 413 with the error body" \
+    '[ "$status" = 413 ] && [ "$(field error)" = PAYLOAD_TOO_LARGE ] && [ "$(field message)" = "La imagen supera el máximo de 5 MB." ]'
+  check "the 413 traceId is the X-Correlation-Id" '[ "$(field traceId)" = "$(header X-Correlation-Id)" ]'
+
   request /api/v1/catalog/products -X POST -H 'Authorization: Bearer smoke-token' -H 'X-User-Id: someone-else'
   check "a write with Authorization reaches catalog-api with the credential" \
     '[ "$status" = 200 ] && [ "$(field authorization)" = "Bearer smoke-token" ]'
@@ -165,6 +183,9 @@ if [ "$FRONT" = up ]; then
 else
   request /api/v1/catalog/products
   check "with catalog-api down, /api/v1/catalog/ answers 503 with the error body" \
+    '[ "$status" = 503 ] && [ "$(field error)" = SERVICE_UNAVAILABLE ]'
+  request /media/0123456789abcdef0123456789abcdef.png
+  check "with catalog-api down, /media/ answers 503 with the error body" \
     '[ "$status" = 503 ] && [ "$(field error)" = SERVICE_UNAVAILABLE ]'
 fi
 
