@@ -105,6 +105,69 @@ request /status/catalog/anything
 check "/status/<service> reaches /health and nothing else" \
   '[ "$status" = 404 ] && [ "$(field error)" = NOT_FOUND ]'
 
+# E4b (ADR-017, Annex F): /api/v1/catalog/ → catalog-api. The token is validated by the service;
+# the gateway only rejects a protected route that arrives without Authorization (cheap filter).
+expect_unauthorized() {
+  check "$1 answers 401 with the error body" \
+    '[ "$status" = 401 ] && [ "$(field error)" = UNAUTHORIZED ] && [ "$(field message)" = "Debe iniciar sesión para continuar." ]'
+  check "$1: the 401 carries WWW-Authenticate and its traceId is the X-Correlation-Id" \
+    '[ "$(header WWW-Authenticate)" = Bearer ] && [ "$(field traceId)" = "$(header X-Correlation-Id)" ]'
+}
+request /api/v1/catalog/products/mine
+expect_unauthorized "GET /api/v1/catalog/products/mine (E-12) without Authorization"
+request /api/v1/catalog/products -X POST -H 'Content-Type: application/json' -d '{}'
+expect_unauthorized "POST /api/v1/catalog/products (E-13) without Authorization"
+request /api/v1/catalog/products/0000/photo -X DELETE
+expect_unauthorized "DELETE on a catalog route without Authorization"
+
+request /internal/v1/catalog/products/0000
+check "/internal/ is never routed: 404 with the error body (D-C27)" \
+  '[ "$status" = 404 ] && [ "$(field error)" = NOT_FOUND ]'
+
+request /api/v1/catalog/products -X OPTIONS -H 'Origin: http://localhost:5173' \
+  -H 'Access-Control-Request-Method: POST' -H 'Access-Control-Request-Headers: authorization,idempotency-key'
+check "the preflight from the container's dev origin answers 204 (no credential needed)" '[ "$status" = 204 ]'
+check "the preflight allows that origin" '[ "$(header Access-Control-Allow-Origin)" = http://localhost:5173 ]'
+check "the preflight allows Idempotency-Key and Authorization" \
+  'grep -qi "Idempotency-Key" <<< "$(header Access-Control-Allow-Headers)" && grep -qi "Authorization" <<< "$(header Access-Control-Allow-Headers)"'
+request /api/v1/catalog/products -X OPTIONS -H 'Origin: https://evil.example' -H 'Access-Control-Request-Method: POST'
+check "an unknown origin gets no Access-Control-Allow-Origin" '[ -z "$(header Access-Control-Allow-Origin)" ]'
+
+if [ "$FRONT" = up ]; then
+  request /api/v1/catalog/products -H 'Origin: http://localhost:5173' -H 'X-Correlation-Id: smoke-catalog-1'
+  check "GET /api/v1/catalog/products (E-10) is anonymous and reaches catalog-api" \
+    '[ "$status" = 200 ] && [ "$(field path)" = /api/v1/catalog/products ]'
+  check "catalog-api receives the same X-Correlation-Id" '[ "$(field correlationId)" = smoke-catalog-1 ]'
+  check "the response exposes X-Correlation-Id and Location to the container's origin" \
+    'grep -qi "X-Correlation-Id" <<< "$(header Access-Control-Expose-Headers)" && grep -qi "Location" <<< "$(header Access-Control-Expose-Headers)"'
+  request /api/v1/catalog/products/0000
+  check "GET /api/v1/catalog/products/{id} (E-11) is anonymous" '[ "$status" = 200 ]'
+  request /api/v1/catalog/categories
+  check "GET /api/v1/catalog/categories (E-19) is anonymous" '[ "$status" = 200 ]'
+  request /api/v1/catalog/units
+  check "GET /api/v1/catalog/units (E-20) is anonymous" '[ "$status" = 200 ]'
+  request /api/v1/catalog/products -X POST -H 'Authorization: Bearer smoke-token' -H 'X-User-Id: someone-else'
+  check "a write with Authorization reaches catalog-api with the credential" \
+    '[ "$status" = 200 ] && [ "$(field authorization)" = "Bearer smoke-token" ]'
+  check "X-User-* never reaches a service (D-C28)" '[ -z "$(field xUserId)" ] && grep -q "\"xUserId\":\"\"" <<< "$body"'
+
+  # Last: it uses up this client's write allowance (a general per-IP ceiling on writes, cross-cutting §9).
+  limited=""
+  for _ in $(seq 1 40); do
+    request /api/v1/catalog/products -X POST -H 'Authorization: Bearer smoke-token'
+    [ "$status" = 429 ] && { limited=yes; break; }
+  done
+  check "past the write limit, a write answers 429" '[ "$limited" = yes ]'
+  check "the 429 carries the error body and Retry-After" \
+    '[ "$(field error)" = TOO_MANY_REQUESTS ] && [ "$(field message)" = "Demasiadas solicitudes. Intente de nuevo más tarde." ] && [ -n "$(header Retry-After)" ]'
+  request /api/v1/catalog/products
+  check "reads are not limited by the write ceiling" '[ "$status" = 200 ]'
+else
+  request /api/v1/catalog/products
+  check "with catalog-api down, /api/v1/catalog/ answers 503 with the error body" \
+    '[ "$status" = 503 ] && [ "$(field error)" = SERVICE_UNAVAILABLE ]'
+fi
+
 request /portals/unknown/remoteEntry.js
 check "a portal that does not exist answers 404 with the error body" \
   '[ "$status" = 404 ] && [ "$(field error)" = NOT_FOUND ]'
