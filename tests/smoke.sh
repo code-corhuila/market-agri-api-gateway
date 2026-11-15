@@ -219,6 +219,27 @@ if [ "$FRONT" = up ]; then
   check "GET /api/v1/auth/users/{id} with Authorization reaches auth-api with the credential and no X-User-*" \
     '[ "$status" = 200 ] && [ "$(field path)" = /api/v1/auth/users/0000 ] && [ "$(field authorization)" = "Bearer smoke-token" ] && grep -q "\"xUserId\":\"\"" <<< "$body"'
 
+  # HU-AUTH-005 (D-C29): the login has its own limit, 10 attempts per IP in 5 minutes, apart from the
+  # general write ceiling. This run already spent one or two (the 503 above, the anonymous E-02 just
+  # before), so between 8 and 10 still reach auth-api; then 429 from the gateway, never from auth-api.
+  # (method path) in variables: inside check, $1 and $2 are check's own arguments.
+  reached=0
+  login_status=""
+  for _ in $(seq 1 12); do
+    request /api/v1/auth/login -X POST -H 'Content-Type: application/json' -d '{}'
+    login_status="$status"
+    [ "$status" = 200 ] && [ "$(field path)" = /api/v1/auth/login ] || break
+    reached=$((reached + 1))
+  done
+  check "the login reaches auth-api up to its own limit (between 8 and 10 more in this run, 10 per IP in 5 min)" \
+    '[ "$reached" -ge 8 ] && [ "$reached" -le 10 ]'
+  check "past the login limit, E-02 answers 429 from the gateway with the error body and Retry-After" \
+    '[ "$login_status" = 429 ] && [ "$(field error)" = TOO_MANY_REQUESTS ] && [ -n "$(header Retry-After)" ]'
+  request /api/v1/auth/register -X POST -H 'Content-Type: application/json' -d '{}'
+  check "the login limit does not stop another auth write (E-01)" '[ "$status" = 200 ] && [ "$(field path)" = /api/v1/auth/register ]'
+  request /api/v1/catalog/products
+  check "the login limit does not stop other routes" '[ "$status" = 200 ]'
+
   # Last: it uses up this client's write allowance (a general per-IP ceiling on writes, cross-cutting §9).
   limited=""
   for _ in $(seq 1 40); do
